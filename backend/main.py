@@ -1,236 +1,255 @@
-import os, re, json, pathlib, hashlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+import os, json, hashlib, re
+from dotenv import load_dotenv
 from pydantic import BaseModel
-from typing import List
 
-app = FastAPI(title="Somobay AI - Accurate Synonym Fixed")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+load_dotenv()
 
-BASE = pathlib.Path(__file__).parent
-def load_file(name):
-    for p in [BASE/name, pathlib.Path(f"/mnt/data/{name}")]:
-        if p.exists():
-            try:
-                txt = p.read_text(encoding='utf-8', errors='ignore')
-                txt = re.sub(r'\r', '', txt)
-                return txt
-            except: continue
-    return ""
+app = FastAPI(title="CoopBd AI - Final Gemini+PDF", version="2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-AIN = load_file("ain_2001.txt")
-BIDI = load_file("bidhimala_2004.txt")
-CIRC = load_file("circular.txt")
+# --- Try Gemini first, fallback to Groq ---
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-def build_index(text):
-    idx={}
-    matches=list(re.finditer(r'\n\s*([০-৯0-9]+)[।]\s*', text))
-    for i,m in enumerate(matches):
-        num_en = m.group(1).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
-        start=m.start()
-        end=matches[i+1].start() if i+1 < len(matches) else start+12000
-        chunk=text[start:end].strip()[:10000]
-        if len(chunk)>150:
-            idx[num_en]=chunk
-    return idx
+gemini_model = None
+groq_client = None
 
-AIN_IDX = build_index(AIN)
-BIDI_IDX = build_index(BIDI)
+if GEMINI_KEY:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_KEY)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        print(f"✅ Gemini 1.5 Flash Ready")
+    except Exception as e:
+        print(f"Gemini Error: {e}")
 
-print(f"Index - AIN {len(AIN_IDX)} BIDI {len(BIDI_IDX)}")
-
-# === COMPREHENSIVE SYNONYM MAP - This fixes "প্রশ্ন করি কি উত্তর দেয় কি" ===
-SYNONYM_MAP = {
-    # নির্বাচন সংক্রান্ত - সবগুলো ১৮ ধারায় যাবে
-    "নির্বাচন না করলে": "18",
-    "নির্বাচন না হলে": "18",
-    "নির্বাচন না": "18",
-    "নির্বাচন করতে না পারলে": "18",
-    "শাস্তি": "18,22",
-    "বিলুপ্ত": "18",
-    "ভঙ্গ": "22",
-    "মেয়াদ শেষ": "18",
-    "মেয়াদ শেষ": "18",
-    "মেয়াদ শেষ হলে": "18",
-    "করণীয় কি": "18,20",
-    "করণীয়": "18,20",
-    "এডহক": "18",
-    "অন্তর্বর্তী": "18",
-    "অন্তবর্তী": "18",
-    "মেয়াদ কত": "18",
-    "মেয়াদ কত": "18",
-    "কতদিন": "18,19,20",
-    "পদ শূন্য": "20",
-    "শূন্য হলে": "20",
-    "যোগ্যতা": "19",
-    "অযোগ্যতা": "19",
-    "বিরোধ": "50",
-    "বিবাদ": "50",
-    "সভা না করলে": "22,23",
-    "সাধারণ সভা": "23",
-    "বিশেষ সভা": "24",
-    "নিবন্ধন": "9,10,11",
-    "বাতিল": "17,22",
-    "সদস্য পদ বাতিল": "17",
-    "ঋণ": "87,88",
-    "ঋণ খেলাপি": "19,87",
-    "অডিট": "40,41,42,43,44",
-    "নিরীক্ষা": "40,41",
-    "ডিগ্রি": "42",
-    "সার্টিফিকেট": "52,53",
-    "অবসায়ন": "62,63",
-    "তদন্ত": "49",
-    "পরিদর্শন": "48",
-    "উপ-আইন": "15,16",
-}
-
-def make_chunks(text):
-    chunks=[]
-    for para in re.split(r'\n\s*\n', text):
-        para=para.strip()
-        if len(para)>80:
-            chunks.append(re.sub(r'\s+', ' ', para))
-    return chunks
-
-ALL_CHUNKS = make_chunks(AIN) + make_chunks(BIDI)
-if CIRC: ALL_CHUNKS+=make_chunks(CIRC)
-
-def retrieve_accurate(query):
-    trans=str.maketrans("০১২৩৪৫৬৭৮৯","0123456789")
-    q_lower=query.lower()
-    
-    # 1. Sub-dhara 50(6)
-    m=re.search(r'([০-৯0-9]+)\s*\(\s*([০-৯0-9]+)\s*\)', query)
-    if m:
-        dhara_en=m.group(1).translate(trans)
-        if dhara_en in AIN_IDX:
-            return [AIN_IDX[dhara_en]], f"ধারা {m.group(1)}({m.group(2)})"
-    
-    # 2. Synonym map - check longest phrase first
-    sorted_synonyms=sorted(SYNONYM_MAP.keys(), key=len, reverse=True)
-    for phrase in sorted_synonyms:
-        if phrase in query:
-            dhara_list = SYNONYM_MAP[phrase].split(',')
-            result=[]
-            for d in dhara_list:
-                d=d.strip()
-                if d in AIN_IDX:
-                    result.append(AIN_IDX[d])
-            if result:
-                return result[:2], f"ধারা {SYNONYM_MAP[phrase]}"
-
-    # 3. Direct number
-    nums=[n.translate(trans) for n in re.findall(r'[০-৯0-9]+', query)]
-    for n in nums:
-        if n in AIN_IDX:
-            return [AIN_IDX[n]], f"ধারা {n}"
-    
-    # 4. Keyword fallback
-    q_tokens=set(re.findall(r'[\u0980-\u09FF]{3,}', query))
-    stop=set(["সমবায়","সমিতি","আইনে","ধারায়","কি","কত","হবে","সম্পর্কে","বলুন","জানতে","চাই"])
-    q_f=[t for t in q_tokens if t not in stop]
-    scored=[]
-    for ch in ALL_CHUNKS:
-        score=sum(1 for qt in q_f if qt in ch)
-        if score>0:
-            scored.append((score, ch))
-    scored.sort(reverse=True, key=lambda x:x[0])
-    if scored:
-        return [t for _,t in scored[:2]], "প্রাসঙ্গিক অংশ"
-    return [], ""
-
-GROQ_KEY=os.environ.get("GROQ_API_KEY","")
-groq_client=None
-if GROQ_KEY:
+if not gemini_model and GROQ_KEY:
     try:
         from groq import Groq
-        groq_client=Groq(api_key=GROQ_KEY)
-    except: pass
+        groq_client = Groq(api_key=GROQ_KEY)
+        print(f"✅ Groq Ready as fallback")
+    except Exception as e:
+        print(f"Groq Error: {e}")
 
-CACHE_FILE=BASE/"cache.json"
-CACHE={}
-if CACHE_FILE.exists():
-    try: CACHE=json.loads(CACHE_FILE.read_text(encoding='utf-8'))
+# --- Load PDF or TXT (PDF first for correct font) ---
+law_book = ""
+pdf_chunks = []
+
+def load_files():
+    global law_book, pdf_chunks
+    # Try PDF first (your old correct method)
+    try:
+        from pypdf import PdfReader
+        pdf_files = ["ain_2001.pdf", "bidhimala_2004.pdf", "circular.pdf"]
+        for pdf_file in pdf_files:
+            if os.path.exists(pdf_file):
+                try:
+                    reader = PdfReader(pdf_file)
+                    full_text = ""
+                    for page_num, page in enumerate(reader.pages):
+                        page_text = page.extract_text() or ""
+                        full_text += page_text + "\n"
+                        # Your old chunking - 800 chars
+                        for i in range(0, len(page_text), 800):
+                            chunk = page_text[i:i+800]
+                            if len(chunk.strip()) > 100:
+                                pdf_chunks.append({
+                                    "text": chunk,
+                                    "source": pdf_file,
+                                    "page": page_num + 1
+                                })
+                    law_book += f"\n\n--- {pdf_file} ---\n\n" + full_text
+                    print(f"✅ {pdf_file} PDF Loaded, Pages: {len(reader.pages)}")
+                except Exception as e:
+                    print(f"PDF Error {pdf_file}: {e}")
+    except ImportError:
+        print("pypdf not installed, trying txt")
+
+    # Fallback to TXT if no PDF chunks
+    if not pdf_chunks:
+        for txt_file in ["ain_2001.txt", "bidhimala_2004.txt", "circular.txt"]:
+            if os.path.exists(txt_file):
+                try:
+                    text = open(txt_file, encoding='utf-8', errors='ignore').read()
+                    law_book += f"\n\n--- {txt_file} ---\n\n" + text
+                    for i in range(0, len(text), 800):
+                        chunk = text[i:i+800]
+                        if len(chunk.strip()) > 100:
+                            pdf_chunks.append({
+                                "text": chunk,
+                                "source": txt_file,
+                                "page": i//800 + 1
+                            })
+                    print(f"✅ {txt_file} TXT Loaded")
+                except Exception as e:
+                    print(f"TXT Error {txt_file}: {e}")
+
+    print(f"Total: {len(law_book)} chars, {len(pdf_chunks)} chunks")
+
+load_files()
+
+# --- Token Save Cache (Your Rule 04) ---
+CACHE_FILE = "cache.json"
+CACHE = {}
+if os.path.exists(CACHE_FILE):
+    try:
+        CACHE = json.loads(open(CACHE_FILE, encoding='utf-8').read())
+        print(f"Cache loaded: {len(CACHE)}")
     except: CACHE={}
 
 def save_cache():
-    try: CACHE_FILE.write_text(json.dumps(CACHE, ensure_ascii=False), encoding='utf-8')
+    try:
+        open(CACHE_FILE, 'w', encoding='utf-8').write(json.dumps(CACHE, ensure_ascii=False))
     except: pass
 
 def ckey(q): return hashlib.md5(q.lower().strip().encode('utf-8')).hexdigest()
 
+# --- Synonym Map for Accurate Retrieval (Your corrections) ---
+SYNONYM_BOOST = {
+    "অবসায়ন": ["অবসায়ন", "অবসায়ক", "৫৩", "৫৪", "৫৫", "৫৬", "৫৭", "৫৮"],
+    "অবসায়ন": ["অবসায়ন", "৫৩", "৫৪", "৫৫", "৫৬", "৫৭", "৫৮"],
+    "নির্বাচন না করলে": ["নির্বাচন", "বিলুপ্ত", "১৮", "১২০", "অন্তর্বর্তী"],
+    "শাস্তি": ["বিলুপ্ত", "ভঙ্গ", "১৮", "২২"],
+    "এডহক": ["অন্তর্বর্তী", "১৮", "১২০"],
+    "মেয়াদ শেষ": ["মেয়াদ", "১৮", "বিলুপ্ত"],
+}
+
+class QuestionRequest(BaseModel):
+    text: str
+
 class ChatRequest(BaseModel):
     question: str
-    user_id: str="anon"
+    user_id: str = "anon"
+
 class ChatResponse(BaseModel):
     answer: str
     references: List[str] = []
-    cached: bool=False
+    cached: bool = False
+    sources: List[str] = []
+
+from typing import List
+
+def retrieve(query, top_k=5):
+    # Expand query with synonyms
+    expanded_query = query
+    for key, synonyms in SYNONYM_BOOST.items():
+        if key in query:
+            expanded_query += " " + " ".join(synonyms)
+    
+    query_words = [w for w in expanded_query.split() if len(w) > 2]
+    
+    scored = []
+    for chunk in pdf_chunks:
+        score = 0
+        chunk_lower = chunk["text"].lower()
+        for word in query_words:
+            if word.lower() in chunk_lower:
+                score += 1
+        # Bonus for exact dhara number match like ৫৩, ৫৪
+        if score > 0:
+            scored.append({"score": score, "data": chunk})
+    
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:top_k]
 
 @app.get("/")
 def root():
-    return {"status":"Synonym Accurate", "cache": len(CACHE), "groq": bool(groq_client)}
+    if os.path.exists("index.html"):
+        return FileResponse("index.html")
+    return {"message": "CoopBd AI Backend চালু আছে - Final", "chunks": len(pdf_chunks), "gemini": bool(gemini_model), "groq": bool(groq_client), "cache": len(CACHE)}
 
-@app.post("/api/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
-    q=req.question.strip()
-    k=ckey(q)
+@app.get("/health")
+def health():
+    return {"status": "ok", "chunks": len(pdf_chunks), "gemini": bool(gemini_model), "cache": len(CACHE)}
+
+@app.post("/ask")
+def ask_question(req: QuestionRequest):
+    q = req.text.strip()
+    k = ckey(q)
     if k in CACHE:
-        return ChatResponse(answer=CACHE[k], references=[], cached=True)
+        return {"answer": CACHE[k], "sources": [], "cached": True}
 
-    if "অধ্যায়" in q and "ধারা" in q:
-        ans="সমবায় সমিতি আইন, ২০০১ এ ১৩টি অধ্যায় ও ৯০টি ধারা রয়েছে। বিধিমালা ২০০৪ এ ১১৭টি বিধি রয়েছে।\n\nসূত্র: আইন ২০০১ ভূমিকা"
-        CACHE[k]=ans; save_cache()
-        return ChatResponse(answer=ans, references=[], cached=False)
-
-    chunks, ref = retrieve_accurate(q)
+    top_chunks = retrieve(q, top_k=5)
     
-    if not chunks:
-        ans=f"দুঃখিত, '{q}' বিষয়ে আপনার আপলোড করা ফাইলে সরাসরি তথ্য পাওয়া যায়নি। ধারা নম্বর দিয়ে জিজ্ঞাসা করুন।\n\nসূত্র: -"
-        CACHE[k]=ans; save_cache()
-        return ChatResponse(answer=ans, references=[], cached=False)
+    context = ""
+    sources = []
+    for item in top_chunks:
+        context += f"\n\n{item['data']['text']}"
+        sources.append(f"{item['data']['source']}, পৃষ্ঠা {item['data']['page']}")
 
-    context="\n\n---\n\n".join(chunks)[:15000]
+    if not context:
+        context = "প্রাসঙ্গিক তথ্য পাওয়া যায়নি।"
 
-    if groq_client:
-        try:
-            system="""তুমি সমবায় আইন AI। তোমার কাজ ১০০% নির্ভুল উত্তর দেওয়া।
+    # === YOUR OLD PROMPT - Upgraded with your 6 rules ===
+    prompt = f"""আপনি CoopBd AI, বাংলাদেশ সমবায় আইন ২০০১ ও বিধিমালা ২০০৪ বিশেষজ্ঞ।
 
-কঠোর নিয়ম:
-১. শুধুমাত্র Context (ain_2001.txt, bidhimala_2004.txt, circular.txt) থেকেই উত্তর দেবে। বাইরে থেকে বানাবে না।
-২. প্রশ্নের সুনির্দিষ্ট উত্তর প্রথম লাইনে দাও। যেমন:
-   - "নির্বাচন না করলে কমিটি বিলুপ্ত হবে এবং ১২০ দিনের জন্য অন্তর্বর্তী কমিটি নিয়োগ হবে।"
-   - "এডহক কমিটির মেয়াদ ১২০ দিন।"
-৩. তারপর ৩-৪ বাক্যে আইনের ভাষায় ব্যাখ্যা দাও, উপ-ধারা সহ (১৮(৩)(৪)(৫)(৭) ইত্যাদি)।
-৪. ভুল তথ্য, বাড়ি ভাড়া, বা অপ্রাসঙ্গিক তথ্য দেবে না।
-৫. শেষ লাইনে "সূত্র: ধারা ১৮(৫)" লিখবে।
-৬. উত্তর বাংলায়, পরিষ্কার, ২০০ শব্দের মধ্যে।
+আপনার ৬টি কঠোর নিয়ম:
+০১. ChatGPT এর মতো সুন্দর, গুছানো, মানবিক ভাষায় উত্তর দেবেন।
+০২. শুধুমাত্র নিচের আইনের অংশগুলো (ain_2001.pdf, bidhimala_2004.pdf) থেকেই উত্তর দেবেন। বাইরে থেকে বানানো উত্তর দেবেন না।
+০৩. ফন্ট ভাঙবে না, পরিষ্কার বাংলায় উত্তর দেবেন।
+০৪. রিপিট প্রশ্নে টোকেন বাঁচান।
+০৫. উত্তর বড় হলেও সম্পূর্ণ দেখাবেন, কেটে দেবেন না।
+০৬. নির্ভুল উত্তর খুবই জরুরী। ভুল উত্তর দেবেন না।
 
-যদি Context এ উত্তর না থাকে, বলো "এই বিষয়ে ফাইলে তথ্য নেই"।
-"""
+বিশেষ তথ্য (ব্যবহারকারীর কারেকশন):
+- অবসায়ন মূলত ধারা ৫৩-৫৮ এবং বিধিমালা ৮০-৮৫
+- এডহক/অন্তর্বর্তী কমিটির মেয়াদ ১২০ দিন (ধারা ১৮(৫))
+- ১৮(৩) প্রথম কমিটি ২ বছর, ১৮(৪) নির্বাচিত কমিটি ৩ বছর, ১৮(৫) না করলে বিলুপ্ত ও ১২০ দিনের অন্তর্বর্তী, ১৮(৭) পুনরায় অন্তর্বর্তী
 
-            user_p=f"""Context (আইনের হুবহু অংশ, শুধু এখান থেকেই উত্তর দাও):
-{context}
+আইনের অংশ:
+{context[:12000]}
 
 প্রশ্ন: {q}
 
-নির্ভুল উত্তর দাও:"""
+উত্তরের ফরম্যাট:
+১. প্রথম লাইনে সুনির্দিষ্ট সরাসরি উত্তর (যেমন: "অবসায়ন ধারা ৫৩-৫৮ এ বর্ণিত" বা "মেয়াদ ১২০ দিন")
+২. মাঝে ৩-৪ বাক্যে বিস্তারিত ব্যাখ্যা
+৩. শেষে "সূত্র: ধারা ৫৩-৫৮, বিধি ৮০-৮৫" এইভাবে
 
-            comp=groq_client.chat.completions.create(
+উত্তর:"""
+
+    try:
+        answer_text = ""
+        if gemini_model:
+            response = gemini_model.generate_content(prompt)
+            answer_text = response.text
+        elif groq_client:
+            comp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role":"system","content":system},
-                    {"role":"user","content":user_p}
-                ],
-                temperature=0.02,
-                max_tokens=700,
+                messages=[{"role":"user","content": prompt}],
+                temperature=0.05,
+                max_tokens=800,
             )
-            final=comp.choices[0].message.content.strip()
-            CACHE[k]=final; save_cache()
-            return ChatResponse(answer=final, references=[], cached=False)
-        except Exception as e:
-            print(e)
+            answer_text = comp.choices[0].message.content
+        else:
+            answer_text = "API Key পাওয়া যায়নি।"
 
-    ans=chunks[0][:1500] + f"\n\nসূত্র: {ref}"
-    CACHE[k]=ans; save_cache()
-    return ChatResponse(answer=ans, references=[], cached=False)
+        CACHE[k] = answer_text
+        save_cache()
+
+        return {"answer": answer_text, "sources": list(set(sources)), "cached": False}
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"answer": f"Error: {str(e)}", "sources": []}
+
+# --- New endpoint for your new frontend (keeps old /ask working) ---
+@app.post("/api/chat")
+def chat_api(req: ChatRequest):
+    # Reuse /ask logic
+    q_req = QuestionRequest(text=req.question)
+    result = ask_question(q_req)
+    # Convert to new format (no yellow box)
+    return ChatResponse(
+        answer=result["answer"],
+        references=[],  # No yellow box as you wanted
+        cached=result.get("cached", False),
+        sources=result.get("sources", [])
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
