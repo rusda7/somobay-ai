@@ -41,9 +41,9 @@ export default function Home() {
     <div className="flex h-screen bg-[#F5F7F6] overflow-hidden">
       {/* Sidebar */}
       <div className="w-[280px] bg-[#0B5C33] text-white flex flex-col p-3 hidden md:flex shrink-0">
-        <div className="flex items-center gap-2 p-2 mb-4"><div className="w-8 h-8 bg-white rounded flex items-center justify-center text-[#0B5C33] font-bold">স</div><div><p className="font-bold text-sm">সমবায় অধিদপ্তর</p><p className="text-[11px] opacity-80">আইন সহকারী - ChatGPT Mode</p></div></div>
+        <div className="flex items-center gap-2 p-2 mb-4"><div className="w-8 h-8 bg-white rounded flex items-center justify-center text-[#0B5C33] font-bold">স</div><div><p className="font-bold text-sm">সমবায় অধিদপ্তর</p><p className="text-[11px] opacity-80">আইন সহকারী </p></div></div>
         <button onClick={()=>setMessages([messages[0]])} className="bg-white/15 hover:bg-white/25 p-2.5 rounded-lg flex items-center gap-2 mb-4 text-sm"><Plus size={16}/> নতুন চ্যাট</button>
-        <div className="text-[11px] opacity-70 p-2">৬টি নিয়ম মেনে চলছে:<br/>✓ শুধু আপলোড ফাইল থেকে<br/>✓ ভুল উত্তর নয়<br/>✓ ফন্ট ভাঙবে না<br/>✓ টোকেন সেভ</div>
+        <div className="text-[11px] opacity-70 p-2"> </div>
         <div className="mt-auto p-2 text-[10px] opacity-50">© ২০২৬ সমবায় অধিদপ্তর</div>
       </div>
 
