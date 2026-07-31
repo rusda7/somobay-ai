@@ -5,7 +5,7 @@ type Message = { role: 'user' | 'ai', content: string, cached?: boolean }
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'ai', content: 'আসসালামু আলাইকুম! আমি সমবায় আইন সহকারী।\n\n সমবায় সমিতি আইন ও বিধিমালা এবং সার্কুলার থেকেই শুধুমাত্র নির্ভুল উত্তর দেব।\n\nযেকোনো প্রশ্ন করুন:\n•' }
+    { role: 'ai', content: 'আসসালামু আলাইকুম! আমি সমবায় আইন সহকারী।\n সমবায় সমিতি আইন ও বিধিমালা এবং সার্কুলার থেকেই শুধুমাত্র নির্ভুল উত্তর দেব।\n যেকোনো প্রশ্ন করুন:\n' }
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
