@@ -1,1 +1,22 @@
 
+<!DOCTYPE html>
+<html lang="bn">
+<head><meta charset="UTF-8"><title>Admin - Upload</title>
+<style>body{font-family:sans-serif; max-width:700px; margin:30px auto; background:#fff; padding:20px; border-radius:12px}</style>
+</head>
+<body>
+<h2>Admin Panel - ডকুমেন্ট আপলোড</h2>
+<p>আপনার 1000+ KB এর সব .txt ও .pdf এখানে আপলোড করুন।</p>
+<form method="POST" enctype="multipart/form-data">
+<input type="file" name="files" multiple accept=".txt,.pdf" required>
+<button type="submit">আপলোড ও AI কে শেখান</button>
+</form>
+<hr>
+<p>Embeddings আছে? {{ has_emb }}</p>
+<h3>আপলোড করা ফাইল:</h3>
+<ul>{% for f in files %}<li>{{ f }}</li>{% endfor %}</ul>
+<p><a href="/">Chat এ ফিরে যান</a></p>
+<p style="background:#fff3cd; padding:10px">প্রথমবার .env ফাইলে আপনার GEMINI_API_KEY বসাতে ভুলবেন না।</p>
+</body>
+</html>
+
