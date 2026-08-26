@@ -1,1 +1,50 @@
 
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>সমবায় আইন AI - NotebookLM Clone</title>
+<style>
+body{font-family:'Noto Sans Bengali', sans-serif; background:#f6f7fb; margin:0; padding:0}
+.container{max-width:850px; margin:30px auto; background:#fff; border-radius:16px; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.08)}
+h2{color:#1a73e8; text-align:center}
+#chat{height:450px; overflow-y:auto; border:1px solid #eee; border-radius:12px; padding:16px; background:#fafafa}
+.msg{margin:10px 0; padding:12px 14px; border-radius:12px; line-height:1.6}
+.user{background:#e8f0fe; text-align:right}
+.bot{background:#fff; border:1px solid #e0e0e0}
+.sources{font-size:12px; color:#666; margin-top:8px; background:#f1f3f4; padding:8px; border-radius:8px}
+.input-box{display:flex; gap:10px; margin-top:16px}
+input{flex:1; padding:14px; border-radius:24px; border:1px solid #ccc; font-size:16px}
+button{padding:12px 20px; border-radius:24px; border:none; background:#1a73e8; color:#fff; cursor:pointer}
+</style>
+</head>
+<body>
+<div class="container">
+<h2>📘 সমবায় আইন সহকারী (Gemini Powered)</h2>
+<div id="chat"><div class="msg bot">নমস্কার! সমবায় ও সমবায় আইন সম্পর্কে যা জানতে চান জিজ্ঞেস করুন। যেমন: "সদস্য পদ কিভাবে বাতিল হয়?"</div></div>
+<div class="input-box">
+<input id="q" placeholder="আপনার প্রশ্ন লিখুন..." onkeypress="if(event.key==='Enter')send()">
+<button onclick="send()">পাঠান</button>
+</div>
+<p style="text-align:center"><a href="/admin">Admin Panel - ডকুমেন্ট আপলোড</a></p>
+</div>
+<script>
+async function send(){
+ let q=document.getElementById('q'); let txt=q.value.trim(); if(!txt)return;
+ let chat=document.getElementById('chat');
+ chat.innerHTML+=`<div class="msg user">${txt}</div>`;
+ q.value='';
+ chat.innerHTML+=`<div class="msg bot" id="loading">চিন্তা করছি...</div>`;
+ chat.scrollTop=chat.scrollHeight;
+ let res=await fetch('/api/chat',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:txt})});
+ let data=await res.json();
+ document.getElementById('loading').remove();
+ let srcHtml = data.sources ? data.sources.map(s=>`📄 ${s.source} (মিল: ${(s.score*100).toFixed(0)}%)<br>${s.text.substring(0,200)}...`).join('<hr>') : '';
+ chat.innerHTML+=`<div class="msg bot">${data.answer.replace(/\n/g,'<br>')}<div class="sources"><b>সূত্র:</b><br>${srcHtml}</div></div>`;
+ chat.scrollTop=chat.scrollHeight;
+}
+</script>
+</body>
+</html>
+
