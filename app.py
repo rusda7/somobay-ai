@@ -1,3 +1,4 @@
+
 import os, re, pickle, traceback
 import numpy as np
 from flask import Flask, request, render_template, jsonify
@@ -16,9 +17,18 @@ EMB_FILE = "embeddings.pkl"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def get_embedding(text):
-    # পুরনো stable library
-    resp = genai.embed_content(model="models/text-embedding-004", content=text)
-    return resp['embedding']
+    # তোমার Key এর জন্য নতুন embedding মডেল
+    models_to_try = ["models/gemini-embedding-001", "models/text-embedding-004", "models/text-embedding-005", "models/embedding-001"]
+    last_err = None
+    for m in models_to_try:
+        try:
+            resp = genai.embed_content(model=m, content=text)
+            return resp['embedding']
+        except Exception as e:
+            last_err = e
+            print(f"Embedding failed {m}: {e}")
+            continue
+    raise last_err
 
 def chunk_by_dhara(text):
     parts = re.split(r'(?:ধারা|বিধি|উপ-বিধি)\s*[০-৯0-9]+', text)
@@ -71,7 +81,7 @@ def search(query, top_k=5):
     top_idx = np.argsort(sims)[::-1][:top_k]
     results = []
     for idx in top_idx:
-        if float(sims[idx]) < 0.25: continue
+        if float(sims[idx]) < 0.20: continue
         results.append({"text": data["chunks"][idx]["text"], "source": data["chunks"][idx]["source"], "score": float(sims[idx])})
     return results
 
@@ -83,11 +93,16 @@ def index():
 def debug():
     try:
         models = genai.list_models()
-        names = [m.name for m in models if 'embedContent' in m.supported_generation_methods or 'generateContent' in m.supported_generation_methods]
-        return jsonify({"api_key_exists": bool(api_key), "models": names[:30], "library": "google-generativeai 0.8.3"})
+        all_models = []
+        for m in models:
+            all_models.append({"name": m.name, "methods": m.supported_generation_methods})
+        # embedding model আলাদা খুঁজো
+        emb_models = [x for x in all_models if 'embedContent' in x['methods']]
+        gen_models = [x for x in all_models if 'generateContent' in x['methods']]
+        return jsonify({"api_key_exists": True, "embedding_models": emb_models, "generation_models": gen_models[:15], "total": len(all_models)})
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e), "api_key_exists": bool(api_key)})
+        return jsonify({"error": str(e)})
 
 @app.route("/admin", methods=["GET","POST"])
 def admin():
@@ -107,7 +122,7 @@ def admin():
             if saved == 0:
                 raise ValueError("ফাইল সিলেক্ট করুন।")
             count = create_embeddings()
-            success_msg = f"{saved} টি ফাইল, {count} টি ধারা তৈরি হয়েছে।"
+            success_msg = f"{saved} টি ফাইল, {count} টি ধারা তৈরি হয়েছে। এবার চ্যাটে প্রশ্ন করুন।"
         except Exception as e:
             traceback.print_exc()
             error_msg = str(e)
@@ -123,9 +138,23 @@ def chat():
         if not contexts:
             return jsonify({"answer":"দুঃখিত, এই তথ্যটি ডকুমেন্টে নেই।", "sources":[]})
         context_text = "\n\n".join([f"[{c['source']}] {c['text']}" for c in contexts])
-        prompt = f"তুমি সমবায় আইন বিশেষজ্ঞ। শুধু নিচের CONTEXT থেকে বাংলায় উত্তর দাও। যদি CONTEXT এ না থাকে, বলবে নেই।\n\nCONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}"
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        prompt = f"তুমি সমবায় আইন বিশেষজ্ঞ। শুধু CONTEXT থেকে বাংলায় উত্তর দাও।\nCONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}"
+        # তোমার Key তে যা আছে: gemini-2.5-flash, gemini-flash-latest
+        gen_models_to_try = ["models/gemini-2.5-flash", "models/gemini-flash-latest", "models/gemini-2.5-flash-lite", "models/gemini-3.5-flash", "models/gemini-pro-latest"]
+        last_err = None
+        response = None
+        for gm in gen_models_to_try:
+            try:
+                model = genai.GenerativeModel(gm)
+                response = model.generate_content(prompt)
+                print(f"Gen success {gm}")
+                break
+            except Exception as e:
+                last_err = e
+                print(f"Gen failed {gm}: {e}")
+                continue
+        if response is None:
+            raise last_err
         return jsonify({"answer": response.text, "sources": contexts})
     except Exception as e:
         traceback.print_exc()
