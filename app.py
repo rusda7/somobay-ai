@@ -8,9 +8,6 @@ import PyPDF2
 
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    print("WARNING: GEMINI_API_KEY not found!")
-
 client = genai.Client(api_key=api_key) if api_key else None
 
 app = Flask(__name__)
@@ -19,41 +16,34 @@ EMB_FILE = "embeddings.pkl"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def chunk_by_dhara(text):
-    pattern = r'(?=(?:ধারা|বিধি|উপ-বিধি|অনুচ্ছেদ)\s*[০-৯0-9]+)'
+    pattern = r'(?=(?:\u09A7\u09BE\u09B0\u09BE|\u09AC\u09BF\u09A7\u09BF|\u0989\u09AA-\u09AC\u09BF\u09A7\u09BF)\s*[\u09E6-\u09EF0-9]+)'
     parts = re.split(pattern, text)
     chunks = []
     for p in parts:
         p = p.strip()
-        if len(p) < 50:
-            continue
+        if len(p) < 50: continue
         words = p.split()
         if len(words) > 600:
             for i in range(0, len(words), 500):
-                chunk = " ".join(words[i:i+600])
-                if len(chunk) > 100:
-                    chunks.append(chunk)
+                chunks.append(" ".join(words[i:i+600]))
         else:
             chunks.append(p)
-    # যদি ধারা না পাওয়া যায়, 500 শব্দে কাটো
     if not chunks and len(text) > 100:
         words = text.split()
         for i in range(0, len(words), 400):
             chunks.append(" ".join(words[i:i+500]))
-    return chunks[:200]  # প্রথমবার 200 টা চাঙ্কে লিমিট, নাহলে timeout
+    return chunks[:200]
 
 def get_text_from_file(path):
-    try:
-        if path.lower().endswith(".pdf"):
-            reader = PyPDF2.PdfReader(path)
-            text = ""
-            for page in reader.pages[:50]:  # প্রথম 50 পেজ
-                text += (page.extract_text() or "") + "\n"
-            return text
-        else:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-    except Exception as e:
-        return f"Error reading file: {e}"
+    if path.lower().endswith(".pdf"):
+        reader = PyPDF2.PdfReader(path)
+        text = ""
+        for page in reader.pages[:30]:
+            text += (page.extract_text() or "") + "\n"
+        return text
+    else:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
 
 def create_embeddings():
     all_chunks = []
@@ -62,37 +52,23 @@ def create_embeddings():
         if not os.path.isfile(fpath): continue
         if fname.startswith("."): continue
         raw = get_text_from_file(fpath)
-        if not raw or len(raw) < 20:
-            continue
+        if not raw or len(raw) < 20: continue
         chunks = chunk_by_dhara(raw)
         for ch in chunks:
             all_chunks.append({"text": ch, "source": fname})
-
     if not all_chunks:
-        raise ValueError("কোনো টেক্সট পাওয়া যায়নি। ফাইল UTF-8 .txt কিনা দেখুন।")
-
-    print(f"Total chunks: {len(all_chunks)}")
+        raise ValueError("কোনো টেক্সট পাওয়া যায়নি।")
     embeddings = []
-    for idx, c in enumerate(all_chunks):
-        try:
-            resp = client.models.embed_content(model="text-embedding-004", contents=c["text"])
-            embeddings.append(resp.embeddings[0].values)
-            print(f"Embedded {idx+1}/{len(all_chunks)}")
-        except Exception as e:
-            print(f"Embedding failed for chunk {idx}: {e}")
-            # retry with shorter text
-            short = c["text"][:1000]
-            resp = client.models.embed_content(model="text-embedding-004", contents=short)
-            embeddings.append(resp.embeddings[0].values)
-
+    for c in all_chunks:
+        resp = client.models.embed_content(model="text-embedding-004", contents=c["text"])
+        embeddings.append(resp.embeddings[0].values)
     data = {"chunks": all_chunks, "embeddings": np.array(embeddings)}
     with open(EMB_FILE, "wb") as f:
         pickle.dump(data, f)
     return len(all_chunks)
 
 def search(query, top_k=5):
-    if not os.path.exists(EMB_FILE):
-        return []
+    if not os.path.exists(EMB_FILE): return []
     with open(EMB_FILE, "rb") as f:
         data = pickle.load(f)
     q_resp = client.models.embed_content(model="text-embedding-004", contents=query)
@@ -103,8 +79,7 @@ def search(query, top_k=5):
     results = []
     for idx in top_idx:
         score = float(sims[idx])
-        if score < 0.30:
-            continue
+        if score < 0.30: continue
         results.append({"text": data["chunks"][idx]["text"], "source": data["chunks"][idx]["source"], "score": score})
     return results
 
@@ -119,22 +94,21 @@ def admin():
     if request.method == "POST":
         try:
             if not client:
-                raise ValueError("GEMINI_API_KEY পাওয়া যায়নি। Render > Environment Variables এ Key বসান।")
+                raise ValueError("GEMINI_API_KEY পাওয়া যায়নি। Render > Environment এ বসান।")
             files = request.files.getlist("files")
             saved = 0
             for file in files:
                 if file.filename:
-                    # secure filename
                     fname = file.filename.replace(" ", "_")
                     file.save(os.path.join(UPLOAD_FOLDER, fname))
                     saved += 1
             if saved == 0:
-                raise ValueError("কোনো ফাইল সিলেক্ট করা হয়নি।")
+                raise ValueError("ফাইল সিলেক্ট করুন।")
             count = create_embeddings()
-            success_msg = f"{saved} টি ফাইল আপলোড হয়েছে। {count} টি ধারা তৈরি হয়েছে।"
+            success_msg = f"{saved} টি ফাইল, {count} টি ধারা তৈরি হয়েছে।"
         except Exception as e:
             traceback.print_exc()
-            error_msg = f"Error: {str(e)}"
+            error_msg = str(e)
     file_list = [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
     has_emb = os.path.exists(EMB_FILE)
     return render_template("admin.html", files=file_list, has_emb=has_emb, error=error_msg, success=success_msg)
@@ -142,24 +116,16 @@ def admin():
 @app.route("/api/chat", methods=["POST"])
 def chat():
     try:
-        data = request.json
-        question = data.get("question","").strip()
-        if not question:
-            return jsonify({"answer":"প্রশ্ন লিখুন"})
+        question = request.json.get("question","").strip()
         contexts = search(question, top_k=5)
         if not contexts:
-            return jsonify({"answer":"দুঃখিত, এই তথ্যটি আমার কাছে থাকা সমবায় আইনের ডকুমেন্টে নেই।", "sources":[]})
-        context_text = "\n\n".join([f"[Source: {c['source']}]\n{c['text']}" for c in contexts])
-        prompt = f"""তুমি বাংলাদেশের সমবায় আইন বিশেষজ্ঞ। শুধু CONTEXT থেকে উত্তর দাও।
-CONTEXT:
-{context_text}
-প্রশ্ন: {question}
-"""
+            return jsonify({"answer":"দুঃখিত, এই তথ্যটি ডকুমেন্টে নেই।", "sources":[]})
+        context_text = "\n\n".join([f"[{c['source']}] {c['text']}" for c in contexts])
+        prompt = f"শুধু CONTEXT থেকে বাংলায় উত্তর দাও।\nCONTEXT:{context_text}\nপ্রশ্ন:{question}"
         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         return jsonify({"answer": response.text, "sources": contexts})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"answer": f"Error: {str(e)}", "sources":[]})
+        return jsonify({"answer": f"Error: {e}", "sources":[]})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
