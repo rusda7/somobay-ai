@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="bn">
 <head>
 <meta charset="UTF-8">
-<title>Admin - Fast Index</title>
+<title>Admin - Fast Index V12.1</title>
 <style>
 body{font-family: Nirmala UI, sans-serif; max-width:800px; margin:20px auto; padding:20px;}
 .alert{padding:12px; border-radius:6px; margin:10px 0;}
@@ -13,8 +12,8 @@ body{font-family: Nirmala UI, sans-serif; max-width:800px; margin:20px auto; pad
 </style>
 </head>
 <body>
-<h2>Admin Panel - Ultra Fast (V12)</h2>
-<p>এখন আর Embedding API লাগবে না, আপলোড সাথে সাথে Index হবে (1 সেকেন্ড), Chat 2-3 সেকেন্ডে উত্তর দেবে।</p>
+<h2>Admin Panel - Ultra Fast V12.1</h2>
+<p>এখন আর Embedding API লাগবে না, 1 সেকেন্ডে Index হবে।</p>
 
 <form method="POST" enctype="multipart/form-data">
 <input type="file" name="files" multiple accept=".txt,.pdf">
@@ -29,7 +28,7 @@ body{font-family: Nirmala UI, sans-serif; max-width:800px; margin:20px auto; pad
 {% endif %}
 
 <hr>
-<p>Index আছে? <b>{{ has_index }}</b> | <a href="/debug" target="_blank">Debug</a></p>
+<p>Index আছে? <b>{{ has_index }}</b> | <a href="/debug" target="_blank">Debug দেখুন</a></p>
 
 <h3>ফাইল:</h3>
 <ul>
@@ -41,7 +40,7 @@ body{font-family: Nirmala UI, sans-serif; max-width:800px; margin:20px auto; pad
 <a href="/">Chat এ ফিরে যান</a>
 
 <div class="alert info" style="margin-top:20px;">
-<b>V12 Fast:</b> এখন আর gemini-embedding-001 API কল হবে না, তাই স্লো বা Timeout হবে না। সরাসরি Keyword Search + 1 টা Gemini Flash কল। 1000+ KB ফাইলও 1 সেকেন্ডে Index হবে।
+<b>V12.1:</b> No /api/progress call, No timeout, Fast keyword search + 1 Gemini call.
 </div>
 </body>
 </html>
