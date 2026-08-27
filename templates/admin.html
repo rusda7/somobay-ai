@@ -1,22 +1,100 @@
 
 <!DOCTYPE html>
 <html lang="bn">
-<head><meta charset="UTF-8"><title>Admin - Upload</title>
-<style>body{font-family:sans-serif; max-width:700px; margin:30px auto; background:#fff; padding:20px; border-radius:12px}</style>
+<head>
+<meta charset="UTF-8">
+<title>Admin - ডকুমেন্ট আপলোড</title>
+<style>
+body{font-family: Nirmala UI, sans-serif; max-width:800px; margin:20px auto; padding:20px;}
+.progress{width:100%; background:#eee; border-radius:10px; overflow:hidden; margin:15px 0; display:none;}
+.progress-bar{height:25px; background:linear-gradient(90deg,#2196F3,#21CBF3); width:0%; text-align:center; color:white; line-height:25px; transition:width 0.5s;}
+.alert{padding:12px; border-radius:6px; margin:10px 0;}
+.success{background:#d4edda; color:#155724; border:1px solid #c3e6cb;}
+.error{background:#f8d7da; color:#721c24; border:1px solid #f5c6cb;}
+.info{background:#d1ecf1; color:#0c5460; border:1px solid #bee5eb;}
+</style>
 </head>
 <body>
-<h2>Admin Panel - ডকুমেন্ট আপলোড</h2>
-<p>আপনার 1000+ KB এর সব .txt ও .pdf এখানে আপলোড করুন।</p>
-<form method="POST" enctype="multipart/form-data">
-<input type="file" name="files" multiple accept=".txt,.pdf" required>
+<h2>Admin Panel - ডকুমেন্ট আপলোড (V11 Production)</h2>
+<p>আপনার 1000+ KB এর সব .txt ও .pdf এখানে আপলোড করুন। Background এ Embedding হবে, Timeout হবে না।</p>
+
+<form method="POST" enctype="multipart/form-data" id="uploadForm">
+<input type="file" name="files" multiple accept=".txt,.pdf">
 <button type="submit">আপলোড ও AI কে শেখান</button>
 </form>
+
+<div class="progress" id="progressWrap">
+<div class="progress-bar" id="progressBar">0%</div>
+</div>
+<div id="progressText" class="alert info" style="display:none;"></div>
+
+{% if success %}
+<div class="alert success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="alert error">Error: {{ error }}</div>
+{% endif %}
+
 <hr>
-<p>Embeddings আছে? {{ has_emb }}</p>
+<p>Embeddings আছে? <b>{{ has_emb }}</b> | <a href="/debug" target="_blank">Debug দেখুন</a></p>
+
 <h3>আপলোড করা ফাইল:</h3>
-<ul>{% for f in files %}<li>{{ f }}</li>{% endfor %}</ul>
-<p><a href="/">Chat এ ফিরে যান</a></p>
-<p style="background:#fff3cd; padding:10px">প্রথমবার .env ফাইলে আপনার GEMINI_API_KEY বসাতে ভুলবেন না।</p>
+<ul>
+{% for file in files %}
+<li>{{ file }}</li>
+{% endfor %}
+</ul>
+
+<a href="/">Chat এ ফিরে যান</a>
+
+<div class="alert info" style="margin-top:20px;">
+<b>V11 নতুন:</b> বড় ফাইল Timeout হবে না, Background এ 0% থেকে 100% Progress দেখাবে। Render Redeploy হলে ফাইল থাকবে না, তাই একবারে সব ফাইল আপলোড করুন।
+</div>
+
+<script>
+let interval = null;
+function checkProgress(){
+fetch('/api/progress').then(r=>r.json()).then(data=>{
+let wrap = document.getElementById('progressWrap');
+let bar = document.getElementById('progressBar');
+let txt = document.getElementById('progressText');
+if(data.status === 'running'){
+wrap.style.display='block';
+txt.style.display='block';
+let pct = data.total>0 ? Math.round(data.done*100/data.total) : 0;
+bar.style.width = pct+'%';
+bar.textContent = pct+'%';
+txt.textContent = data.message + ` (${data.done}/${data.total})`;
+}else if(data.status === 'done'){
+wrap.style.display='block';
+bar.style.width='100%';
+bar.textContent='100%';
+txt.style.display='block';
+txt.textContent = data.message;
+txt.className='alert success';
+clearInterval(interval);
+setTimeout(()=>location.reload(), 2000);
+}else if(data.status === 'error'){
+txt.style.display='block';
+txt.textContent = data.message;
+txt.className='alert error';
+clearInterval(interval);
+}
+});
+}
+document.getElementById('uploadForm').addEventListener('submit', function(){
+setTimeout(()=>{
+interval = setInterval(checkProgress, 1000);
+checkProgress();
+}, 1000);
+});
+// পেজ লোডে যদি already running থাকে
+fetch('/api/progress').then(r=>r.json()).then(d=>{
+if(d.status==='running'){
+interval = setInterval(checkProgress, 1000);
+checkProgress();
+}
+});
+</script>
 </body>
 </html>
-
