@@ -1,7 +1,7 @@
 
 import os, re, pickle, traceback, time, json, threading
 import numpy as np
-from flask import Flask, request, render_template, jsonify, Response
+from flask import Flask, request, render_template, jsonify, Response, redirect, url_for
 from dotenv import load_dotenv
 import PyPDF2
 import google.generativeai as genai
@@ -12,9 +12,10 @@ if api_key:
     genai.configure(api_key=api_key)
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-EMB_FILE = "embeddings.pkl"
-PROGRESS_FILE = "progress.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
+EMB_FILE = os.path.join(BASE_DIR, "embeddings.pkl")
+PROGRESS_FILE = os.path.join(BASE_DIR, "progress.json")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 progress_state = {"status": "idle", "total": 0, "done": 0, "message": ""}
@@ -23,8 +24,17 @@ def save_progress():
     try:
         with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
             json.dump(progress_state, f, ensure_ascii=False)
-    except:
-        pass
+    except Exception as e:
+        print(f"save_progress error: {e}")
+
+def load_progress():
+    global progress_state
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+                progress_state = json.load(f)
+        except:
+            pass
 
 def get_embedding(text):
     text = text[:3000]
@@ -36,16 +46,13 @@ def get_embedding(text):
             return resp['embedding']
         except Exception as e:
             last_err = e
-            # quota error হলে 2 সেকেন্ড wait
             if "429" in str(e) or "quota" in str(e).lower():
                 time.sleep(2)
             continue
     raise last_err
 
 def chunk_by_dhara_smart(text):
-    # 800 char with 150 overlap - Best for Bengali law
     chunks = []
-    # প্রথমে ধারা দিয়ে ভাগ
     pattern = r'(?=(?:ধারা|বিধি|উপ-বিধি|পরিচ্ছেদ|অধ্যায়)\s*[০-৯0-9]+)'
     parts = re.split(pattern, text)
     for part in parts:
@@ -55,7 +62,6 @@ def chunk_by_dhara_smart(text):
         if len(part) <= 1000:
             chunks.append(part)
         else:
-            # বড় ধারা হলে overlap দিয়ে ভাগ
             for i in range(0, len(part), 700):
                 sub = part[i:i+900].strip()
                 if len(sub) > 80:
@@ -63,7 +69,6 @@ def chunk_by_dhara_smart(text):
         if len(chunks) >= 100:
             break
     if not chunks:
-        # fallback: sliding window
         for i in range(0, len(text), 700):
             sub = text[i:i+900].strip()
             if len(sub) > 80:
@@ -89,13 +94,11 @@ def get_text_from_file(path):
             return f.read()
 
 def expand_query_bangla(q):
-    # বাংলা query expansion - নির্বাচন => নির্বাচন, ভোট, নির্বাচন কমিটি
     expansions = {
         "নির্বাচন": "নির্বাচন ভোট নির্বাচন কমিটি নির্বাচনী",
         "সমিতি": "সমিতি সমবায় সমিতি সদস্য",
-        "ঋণ": "ঋণ ঋণদান সুদ ঋণ খেলাপি",
-        "অডিট": "অডিট নিরীক্ষা হিসাব",
-        "বিধি": "বিধি নিয়ম বিধান",
+        "ঋণ": "ঋণ ঋণদান সুদ",
+        "অডিট": "অডিট নিরীক্ষা",
     }
     extra = ""
     for key, val in expansions.items():
@@ -105,6 +108,7 @@ def expand_query_bangla(q):
 
 def create_embeddings_background():
     global progress_state
+    load_progress()
     try:
         progress_state = {"status": "running", "total": 0, "done": 0, "message": "ফাইল পড়া হচ্ছে..."}
         save_progress()
@@ -130,7 +134,7 @@ def create_embeddings_background():
             return
 
         progress_state["total"] = len(all_chunks)
-        progress_state["message"] = f"{len(all_chunks)} টি ধারা পাওয়া গেছে, Embedding শুরু..."
+        progress_state["message"] = f"{len(all_chunks)} টি ধারা পাওয়া গেছে..."
         save_progress()
 
         final_chunks = []
@@ -142,26 +146,26 @@ def create_embeddings_background():
                 embeddings.append(emb)
             except Exception as e:
                 print(f"Skip {i}: {e}")
-                # quota হলে একটু বেশি wait
                 time.sleep(0.8)
                 continue
             
             progress_state["done"] = i+1
             progress_state["message"] = f"Embedding {i+1}/{len(all_chunks)}"
-            if (i+1) % 10 == 0:
+            if (i+1) % 5 == 0:
                 save_progress()
-            time.sleep(0.12)  # rate limit
+            time.sleep(0.12)
 
         if not embeddings:
-            progress_state = {"status": "error", "total": len(all_chunks), "done": 0, "message": "Embedding ব্যর্থ, API Quota চেক করুন"}
+            progress_state = {"status": "error", "total": len(all_chunks), "done": 0, "message": "Embedding ব্যর্থ, Quota চেক করুন"}
             save_progress()
             return
 
         data = {"chunks": final_chunks, "embeddings": np.array(embeddings)}
         with open(EMB_FILE, "wb") as f:
             pickle.dump(data, f)
+        print(f"Saved embeddings to {EMB_FILE}, count {len(embeddings)}, exists={os.path.exists(EMB_FILE)}")
 
-        progress_state = {"status": "done", "total": len(all_chunks), "done": len(embeddings), "message": f"{len(embeddings)} টি ধারা শেখানো সম্পন্ন!"}
+        progress_state = {"status": "done", "total": len(all_chunks), "done": len(embeddings), "message": f"{len(embeddings)} টি ধারা শেখানো সম্পন্ন! এখন Chat করুন।"}
         save_progress()
 
     except Exception as e:
@@ -174,8 +178,6 @@ def search(query, top_k=6):
         return []
     with open(EMB_FILE, "rb") as f:
         data = pickle.load(f)
-    
-    # query expansion
     expanded = expand_query_bangla(query)
     q_emb = np.array(get_embedding(expanded))
     emb_matrix = data["embeddings"]
@@ -184,7 +186,7 @@ def search(query, top_k=6):
     results = []
     for idx in top_idx:
         score = float(sims[idx])
-        if score < 0.15:  # threshold কমানো হলো
+        if score < 0.12:
             continue
         results.append({"text": data["chunks"][idx]["text"], "source": data["chunks"][idx]["source"], "score": score})
     return results
@@ -195,13 +197,20 @@ def index():
 
 @app.route("/api/progress")
 def api_progress():
-    if os.path.exists(PROGRESS_FILE):
+    load_progress()
+    has_emb = os.path.exists(EMB_FILE)
+    chunk_count = 0
+    if has_emb:
         try:
-            with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
-                return jsonify(json.load(f))
+            with open(EMB_FILE, "rb") as f:
+                d = pickle.load(f)
+                chunk_count = len(d["chunks"])
         except:
             pass
-    return jsonify(progress_state)
+    out = dict(progress_state)
+    out["has_emb"] = has_emb
+    out["chunk_count"] = chunk_count
+    return jsonify(out)
 
 @app.route("/debug")
 def debug():
@@ -212,15 +221,15 @@ def debug():
             with open(EMB_FILE, "rb") as f:
                 d = pickle.load(f)
                 count = len(d["chunks"])
-        return jsonify({"has_emb": has_emb, "chunk_count": count, "progress": progress_state})
+        load_progress()
+        return jsonify({"has_emb": has_emb, "chunk_count": count, "progress": progress_state, "emb_path": EMB_FILE, "exists_check": os.path.exists(EMB_FILE)})
     except Exception as e:
         return jsonify({"error": str(e)})
 
 @app.route("/admin", methods=["GET","POST"])
 def admin():
     global progress_state
-    error_msg = None
-    success_msg = None
+    load_progress()
     if request.method == "POST":
         try:
             files = request.files.getlist("files")
@@ -230,31 +239,31 @@ def admin():
                     fname = file.filename.replace(" ", "_")
                     file.save(os.path.join(UPLOAD_FOLDER, fname))
                     saved += 1
-            # background thread এ embedding শুরু
             if saved > 0 or len([f for f in os.listdir(UPLOAD_FOLDER) if not f.startswith(".")]) > 0:
                 progress_state = {"status": "running", "total": 0, "done": 0, "message": "শুরু হচ্ছে..."}
                 save_progress()
                 thread = threading.Thread(target=create_embeddings_background, daemon=True)
                 thread.start()
-                success_msg = f"{saved} টি ফাইল আপলোড হয়েছে। Background এ AI শিখছে, Progress নিচে দেখুন।"
-            else:
-                raise ValueError("ফাইল সিলেক্ট করুন।")
+            # POST-Redirect-GET to avoid Resend popup
+            return redirect(url_for('admin'))
         except Exception as e:
             traceback.print_exc()
-            error_msg = str(e)
+            progress_state = {"status": "error", "total": 0, "done": 0, "message": str(e)}
+            save_progress()
+            return redirect(url_for('admin'))
+
     file_list = [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
     has_emb = os.path.exists(EMB_FILE)
-    return render_template("admin.html", files=file_list, has_emb=has_emb, error=error_msg, success=success_msg)
+    return render_template("admin.html", files=file_list, has_emb=has_emb)
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     try:
         question = request.json.get("question","").strip()
         if not os.path.exists(EMB_FILE):
-            return jsonify({"answer": "Embedding নেই। Admin এ গিয়ে ফাইল আপলোড করুন এবং 'আপলোড ও AI কে শেখান' এ ক্লিক করুন।", "sources": []})
+            return jsonify({"answer": "Embedding নেই। Admin এ গিয়ে ফাইল আপলোড করুন।", "sources": []})
         contexts = search(question, top_k=6)
         if not contexts:
-            # threshold কমিয়ে আবার চেষ্টা, না পেলে সবচেয়ে কাছের 2 টা দেখাও
             with open(EMB_FILE, "rb") as f:
                 data = pickle.load(f)
             expanded = expand_query_bangla(question)
@@ -265,8 +274,7 @@ def chat():
             contexts = [{"text": data["chunks"][i]["text"], "source": data["chunks"][i]["source"], "score": float(sims[i])} for i in top_idx]
 
         context_text = "\n\n".join([f"[{c['source']}] {c['text'][:1200]}" for c in contexts])
-        prompt = f"তুমি বাংলাদেশের সমবায় আইন বিশেষজ্ঞ। CONTEXT থেকে প্রশ্নের উত্তর বাংলায় বিস্তারিত দাও। CONTEXT এ সরাসরি না থাকলেও সংশ্লিষ্ট তথ্য থেকে অনুমান করে সাহায্য করো। উত্তর শেষে সূত্র উল্লেখ করো।\n\nCONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}"
-
+        prompt = f"তুমি বাংলাদেশের সমবায় আইন বিশেষজ্ঞ। CONTEXT থেকে বাংলায় বিস্তারিত উত্তর দাও।\n\nCONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}"
         gen_models = ["models/gemini-2.5-flash", "models/gemini-flash-latest", "models/gemini-2.5-flash-lite"]
         last_err = None
         response = None
@@ -284,34 +292,6 @@ def chat():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"answer": f"Error: {e}", "sources": []})
-
-@app.route("/api/chat_stream", methods=["POST"])
-def chat_stream():
-    # streaming version - চিন্তা করতেই থাকে সমস্যা দূর করবে
-    def generate():
-        try:
-            data = request.get_json()
-            question = data.get("question","").strip()
-            if not os.path.exists(EMB_FILE):
-                yield f"data: {json.dumps({'token': 'Embedding নেই। Admin এ ফাইল আপলোড করুন।'})}\n\n"
-                return
-            contexts = search(question, top_k=5)
-            if not contexts:
-                yield f"data: {json.dumps({'token': 'দুঃখিত, প্রাসঙ্গিক তথ্য খুঁজে পাওয়া যায়নি। অন্য ভাবে প্রশ্ন করুন।'})}\n\n"
-                return
-            context_text = "\n\n".join([f"[{c['source']}] {c['text'][:1000]}" for c in contexts])
-            prompt = f"CONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}\n\nবাংলায় সংক্ষেপে উত্তর দাও।"
-            model = genai.GenerativeModel("models/gemini-2.5-flash")
-            response = model.generate_content(prompt, stream=True)
-            for chunk in response:
-                if chunk.text:
-                    yield f"data: {json.dumps({'token': chunk.text})}\n\n"
-                    time.sleep(0.02)
-            yield f"data: {json.dumps({'done': True, 'sources': contexts})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'token': f'Error: {e}'})}\n\n"
-    
-    return Response(generate(), mimetype="text/event-stream")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
