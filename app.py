@@ -3,14 +3,12 @@ import os, re, pickle, traceback
 import numpy as np
 from flask import Flask, request, render_template, jsonify
 from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 import PyPDF2
 
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
-# v1 ব্যবহার করো, v1beta তে 404 দেয়
-client = genai.Client(api_key=api_key, http_options=types.HttpOptions(api_version="v1")) if api_key else None
+client = genai.Client(api_key=api_key) if api_key else None
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -18,7 +16,7 @@ EMB_FILE = "embeddings.pkl"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def get_embedding(text):
-    models_to_try = ["gemini-embedding-001", "text-embedding-004", "models/text-embedding-004", "text-embedding-005"]
+    models_to_try = ["gemini-embedding-001", "text-embedding-004", "models/text-embedding-004", "models/gemini-embedding-001", "text-embedding-005"]
     last_err = None
     for m in models_to_try:
         try:
@@ -26,12 +24,13 @@ def get_embedding(text):
             return resp.embeddings[0].values
         except Exception as e:
             last_err = e
-            print(f"Embedding failed for {m}: {e}")
+            print(f"Embedding failed {m}: {e}")
             continue
     raise last_err
 
 def chunk_by_dhara(text):
-    pattern = r'(?=(?:ধারা|বিধি|উপ-বিধি)\s*[০-৯0-9]+)'
+    import re
+    pattern = r'(?:ধারা|বিধি|উপ-বিধি)\s*[০-৯0-9]+'
     parts = re.split(pattern, text)
     chunks = []
     for p in parts:
@@ -72,7 +71,6 @@ def create_embeddings():
     for i, c in enumerate(all_chunks):
         emb = get_embedding(c["text"])
         embeddings.append(emb)
-        print(f"Embedded {i+1}/{len(all_chunks)}")
     data = {"chunks": all_chunks, "embeddings": np.array(embeddings)}
     with open(EMB_FILE, "wb") as f:
         pickle.dump(data, f)
@@ -98,12 +96,14 @@ def index():
 
 @app.route("/debug")
 def debug():
-    # Key দিয়ে কোন মডেলগুলো available সেটা দেখাবে
     try:
         models = client.models.list()
-        model_list = [m.name for m in models]
-        return jsonify({"api_key_exists": bool(api_key), "models": model_list[:30]})
+        model_list = []
+        for m in models:
+            model_list.append({"name": m.name, "methods": getattr(m, 'supported_actions', [])})
+        return jsonify({"api_key_exists": bool(api_key), "models": model_list[:40]})
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e), "api_key_exists": bool(api_key)})
 
 @app.route("/admin", methods=["GET","POST"])
@@ -141,17 +141,16 @@ def chat():
             return jsonify({"answer":"দুঃখিত, এই তথ্যটি ডকুমেন্টে নেই।", "sources":[]})
         context_text = "\n\n".join([f"[{c['source']}] {c['text']}" for c in contexts])
         prompt = f"শুধু CONTEXT থেকে বাংলায় উত্তর দাও।\nCONTEXT:{context_text}\nপ্রশ্ন:{question}"
-        gen_models = ["gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro", "gemini-2.5-flash"]
+        gen_models = ["gemini-2.0-flash", "models/gemini-2.0-flash", "gemini-1.5-flash", "models/gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
         last_err = None
         response = None
         for gm in gen_models:
             try:
                 response = client.models.generate_content(model=gm, contents=prompt)
-                print(f"Generation success with {gm}")
                 break
             except Exception as e:
                 last_err = e
-                print(f"Generation failed for {gm}: {e}")
+                print(f"Gen failed {gm}: {e}")
                 continue
         if response is None:
             raise last_err
