@@ -1,5 +1,5 @@
 
-import os, re, pickle, traceback, json
+import os, re, pickle, traceback
 from flask import Flask, request, render_template, jsonify, redirect, url_for
 from dotenv import load_dotenv
 import PyPDF2
@@ -23,7 +23,7 @@ def get_text_from_file(path):
         try:
             reader = PyPDF2.PdfReader(path)
             text = ""
-            for page in reader.pages[:60]:
+            for page in reader.pages[:30]:  # কম পেজ
                 t = page.extract_text() or ""
                 text += t + "\n"
             return text
@@ -36,30 +36,29 @@ def get_text_from_file(path):
 
 def chunk_smart(text, source):
     chunks = []
-    # ধারা/বিধি দিয়ে ভাগ + overlap
     pattern = r'(?=(?:ধারা|বিধি|উপ-বিধি|পরিচ্ছেদ|অধ্যায়)\s*[০-৯0-9]+)'
     parts = re.split(pattern, text)
     for part in parts:
         part = part.strip()
         if len(part) < 100:
             continue
-        if len(part) <= 1200:
+        if len(part) <= 1000:
             chunks.append({"text": part, "source": source})
         else:
-            for i in range(0, len(part), 800):
-                sub = part[i:i+1100].strip()
+            for i in range(0, len(part), 700):
+                sub = part[i:i+900].strip()
                 if len(sub) > 100:
                     chunks.append({"text": sub, "source": source})
-        if len(chunks) >= 150:
+        if len(chunks) >= 80:
             break
     if not chunks:
-        for i in range(0, len(text), 800):
-            sub = text[i:i+1100].strip()
+        for i in range(0, len(text), 700):
+            sub = text[i:i+900].strip()
             if len(sub) > 100:
                 chunks.append({"text": sub, "source": source})
-            if len(chunks) >= 150:
+            if len(chunks) >= 80:
                 break
-    return chunks[:150]
+    return chunks[:80]
 
 def build_index():
     all_chunks = []
@@ -73,11 +72,9 @@ def build_index():
         if len(raw) < 20:
             continue
         all_chunks.extend(chunk_smart(raw, fname))
-        if len(all_chunks) >= 800:
+        if len(all_chunks) >= 300:  # memory save
             break
     
-    # TF-IDF index for fast search (no embedding API needed)
-    # প্রতি chunk এর word count
     index_data = {
         "chunks": all_chunks,
         "doc_freq": Counter(),
@@ -92,7 +89,7 @@ def build_index():
         pickle.dump(index_data, f)
     return len(all_chunks)
 
-def search_fast(query, top_k=5):
+def search_fast(query, top_k=3):  # শুধু 3 টা context - memory save
     if not os.path.exists(INDEX_FILE):
         return []
     with open(INDEX_FILE, "rb") as f:
@@ -107,23 +104,12 @@ def search_fast(query, top_k=5):
     for idx, ch in enumerate(index_data["chunks"]):
         text_lower = ch["text"].lower()
         score = 0
-        # keyword match + TF-IDF
         for qw in query_words:
             if qw in text_lower:
                 tf = text_lower.count(qw)
                 df = index_data["doc_freq"].get(qw, 1)
                 idf = math.log(N / df + 1)
                 score += tf * idf
-                # বোনাস: শিরোনামে থাকলে
-                if qw in ch["text"][:200].lower():
-                    score += 2
-        # নির্বাচন => ভোট, ভোটার, কমিটি
-        if "নির্বাচন" in query:
-            if any(k in text_lower for k in ["ভোট", "নির্বাচন", "প্রার্থী", "ব্যালট"]):
-                score += 1
-        if "ঋণ" in query and "ঋণ" in text_lower:
-            score += 2
-        
         if score > 0:
             scores.append((score, idx))
     
@@ -135,12 +121,8 @@ def search_fast(query, top_k=5):
             "source": index_data["chunks"][idx]["source"],
             "score": score
         })
-    # যদি একটাও না পায়, প্রথম 2 টা দেখাও
     if not results and index_data["chunks"]:
-        results = [
-            {"text": index_data["chunks"][0]["text"], "source": index_data["chunks"][0]["source"], "score": 0},
-            {"text": index_data["chunks"][1]["text"] if len(index_data["chunks"])>1 else "", "source": index_data["chunks"][1]["source"] if len(index_data["chunks"])>1 else "", "score": 0}
-        ]
+        results = [{"text": index_data["chunks"][0]["text"], "source": index_data["chunks"][0]["source"], "score": 0}]
     return results
 
 @app.route("/")
@@ -159,7 +141,7 @@ def debug():
         except:
             pass
     files = [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f)) and not f.startswith(".")]
-    return jsonify({"has_index": has_index, "chunk_count": count, "files": files, "index_path": INDEX_FILE})
+    return jsonify({"has_index": has_index, "chunk_count": count, "files": files})
 
 @app.route("/admin", methods=["GET","POST"])
 def admin():
@@ -171,14 +153,12 @@ def admin():
                 fname = file.filename.replace(" ", "_")
                 file.save(os.path.join(UPLOAD_FOLDER, fname))
                 saved += 1
-        # instant indexing - no embedding API, 1 second এ শেষ
         try:
             count = build_index()
-            # redirect to avoid resend
-            return redirect(url_for('admin', success=f"{saved} টি ফাইল, {count} টি ধারা Index করা হয়েছে। এখন Chat করুন।"))
+            return redirect(url_for('admin', success=f"{saved} ফাইল, {count} ধারা Index (Fast)। এখন Chat করুন।"))
         except Exception as e:
             traceback.print_exc()
-            return redirect(url_for('admin', error=str(e)))
+            return redirect(url_for('admin', error=str(e)[:200]))
 
     file_list = [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
     has_index = os.path.exists(INDEX_FILE)
@@ -191,16 +171,16 @@ def chat():
     try:
         question = request.json.get("question","").strip()
         if not os.path.exists(INDEX_FILE):
-            return jsonify({"answer": "Index নেই। Admin এ গিয়ে ফাইল আপলোড করুন।", "sources": []})
+            return jsonify({"answer": "Index নেই। Admin এ ফাইল আপলোড করুন।", "sources": []})
         
-        contexts = search_fast(question, top_k=5)
+        contexts = search_fast(question, top_k=3)
         if not contexts:
-            return jsonify({"answer": "দুঃখিত, এই তথ্যটি ডকুমেন্টে নেই।", "sources": []})
+            return jsonify({"answer": "দুঃখিত, প্রাসঙ্গিক তথ্য পাওয়া যায়নি।", "sources": []})
 
-        context_text = "\n\n".join([f"[{c['source']}] {c['text'][:1300]}" for c in contexts])
-        prompt = f"তুমি বাংলাদেশের সমবায় আইন বিশেষজ্ঞ। নিচের CONTEXT থেকে প্রশ্নের উত্তর বাংলায় দাও। CONTEXT এ সরাসরি না থাকলেও সংশ্লিষ্ট তথ্য দিয়ে সাহায্য করো।\n\nCONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}\n\nউত্তর বাংলায় বিস্তারিত দাও এবং শেষে সূত্র (যেমন [ain_2001.txt]) উল্লেখ করো।"
+        # memory save: context ছোট করো
+        context_text = "\n".join([f"{c['text'][:800]}" for c in contexts])
+        prompt = f"CONTEXT:\n{context_text}\n\nপ্রশ্ন: {question}\n\nবাংলায় সংক্ষেপে উত্তর দাও।"
 
-        # শুধু 1 টা API কল - তাই দ্রুত (2-3 সেকেন্ড)
         models_try = ["models/gemini-2.5-flash", "models/gemini-flash-latest", "models/gemini-2.5-flash-lite"]
         last_err = None
         resp_text = None
